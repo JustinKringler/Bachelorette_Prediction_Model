@@ -1,0 +1,788 @@
+---
+title: "Bachelorette Winner Prediction"
+author: "Justin Kringler"
+date: "4/9/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Loading librarys used for the R markdown
+```{r}
+
+library(tidyverse)
+library(readxl)
+library(ggmap)
+library(geosphere)
+library(geodist)
+
+```
+
+-----------------------------------------------------------------------------------
+# Bachelorette Modeling/Prediction Season 5-12 #
+-----------------------------------------------------------------------------------
+
+I have decided to try and create a predictive model based off the hit reality game show, "The Bachelorette". The goal is to use two data sources to create a classifcation model using seasons 5-12 to predict who will win and then test it on a future season. I chose seasons 5-12 because previous season had different rules which would ruin the consistency with the outcome. 
+
+To understand the variables, check the github reposit for more information on each variable and the datasets.
+
+The first step for any data project is to bring in our data and manipulate it to fit our needs.
+
+
+#Bringing in the Data
+```{r}
+#Bringing in first dataset. This file has information about what happens in each season.
+data_show <-read.csv("https://raw.githubusercontent.com/fivethirtyeight/data/master/bachelorette/bachelorette.csv")
+
+```
+
+
+```{r}
+#Bringing in the second dataset. This file has information specifically about each contestant.
+data_contestants <- read_csv("https://raw.githubusercontent.com/JustinKringler/Stats/main/bachelorette-contestants.csv")
+
+```
+
+I am now going to manipulate both our data sources to get them in a format I am happy with so then later I can merge them.
+Our two data sources are "show data" and "contestant data", where "show data" has data about how each contestant did in each season and "contestant data" has data specifically related to each contestant. We will then merge the data later by the contestants name.
+
+#Manipulating the show data
+```{r}
+#Header row appeared multiple times throughout the data so this eliminates the extra rows.
+data_show<-data_show[data_show$SEASON != "SEASON", ] 
+
+#Creating a column to tell if a contestant won or not. Columns Eliminated.9 and Elimination .10 are where it tells the user if a contestant won. We want the results in one column rather than two so we can use it as our response variable. Then we convert that row to numeric (Season being numeric rather than factor will be more convienent later for transforming)
+data_show$WINNER<-ifelse(data_show$ELIMINATION.10=="W",1,ifelse(data_show$ELIMINATION.9=="W",1,0))
+data_show$SEASON<-as.numeric(data_show$SEASON)
+
+#Selecting the only columns we need from this the show data as well as filter for only seasons 5-12
+#Only selecting weeks 5, 6, and 7 because in another workbook I found that they had the most corelations out of all the other weeks.
+data_show <- data_show %>%
+  select(SHOW,SEASON,CONTESTANT,WINNER,ELIMINATION.1,DATES.5,DATES.7,DATES.6)%>%
+  filter(SHOW=="Bachelorette") %>%
+  filter(SEASON>4)%>%
+  filter(SEASON<13)
+```
+
+#Manipulating the contestant data
+```{r}
+#Filtering the data to only include seasons 5-12. We do this because in previous seasons they had different rules and different time frames for the show. Then we convert the names of the contestant to characters.
+data_contestants<- data_contestants %>%
+  filter(data_contestants$Season>4)
+data_contestants$Name <- as.character(data_contestants$Name)
+
+```
+
+-------------------------------------------------------
+# Merging the data #
+------------------------------------------------------
+
+I need to bring the data together so we can perform a model analysis. The plan is to merge the data from both data sources by the names of the contestants. To do this we need to convert their names to the same format. Below are the two different format for each data source.
+
+#Name formats
+```{r}
+head(data_show$CONTESTANT,1)
+head(data_contestants$Name,1)
+```
+
+The formats for the contestants names are both pretty different so I will be converting the names in 'data_contestant' to match the data_show by adding the season in front of the name, replacing the spaces with "_", making all the letters capital, and only using the first letter of the last name.
+
+Before we do this were going to check for other issues in 'data_contestant' so we will run code to let us know if we have any duplicate names that might make us run into problems when converting the format of the names.
+
+#tells us we have a problem because duplicate names in the data
+```{r}
+n_occur <- data.frame(table(data_contestants$Name))
+
+n_occur[n_occur$Freq > 1,]
+
+data_contestants[data_contestants$Name %in% n_occur$Var1[n_occur$Freq > 1],]
+```
+
+It is good to know we have a duplicate contestant in season 10 and 11. There should be no problem when we do the merge function later because of the season number going in front of the name. Knowing that we have duplicates is a good safety precation and I will check later to make sure they merged correctly.
+
+#Making the formats match part 1
+```{r}
+#Making the names of the contestant all uppercase in data_contestants
+data_contestants$Name <- toupper(data_contestants$Name)
+
+#Only keeping the first letter of the last name
+data_contestants$Name <- str_extract(data_contestants$Name,"^\\w+\\s+\\w")
+```
+
+We run into our first problem. Some of the last names are formatted weird or have special characters which makes the value na. To fix this we will manually replace the columns since we only have to do this for a few. An example of what the problem looks like below
+
+#Problem in the formating example
+```{r}
+#example of problem (name appears to be NA)
+data_contestants[48,]
+
+#how many na's do we have
+sum(is.na(data_contestants$Name))
+```
+
+The following code will be manually fixing the data so we do not get an NA and we can continue formatting.
+
+#Manually fixing NA problem
+```{r}
+data_contestants$Name<-replace(data_contestants$Name, 48,'DEREK_X')
+data_contestants$Name<-replace(data_contestants$Name, 56,'JP_R')
+data_contestants$Name<-replace(data_contestants$Name, 63,'RYAN_M')
+data_contestants$Name<-replace(data_contestants$Name, 103,'JEANPAUL_L')
+data_contestants$Name<-replace(data_contestants$Name, 127,'MICHAEL_G')
+data_contestants$Name<-replace(data_contestants$Name, 128,'MIKE_X')
+data_contestants$Name<-replace(data_contestants$Name, 137,'JJ_O')
+data_contestants$Name<-replace(data_contestants$Name, 164,'JJ_L')
+data_contestants$Name<-replace(data_contestants$Name, 177,'DAVID_X')
+data_contestants$Name<-replace(data_contestants$Name, 192,'VINCENT_V')
+```
+
+Now that I fixed that problem we can continue with the next part of formatting.
+
+#Making the formats match part 2
+```{r}
+#replacing the spaces with underscores so both formats are similar
+data_contestants$Name <- gsub(" ", "_", data_contestants$Name)
+
+#Adding the season to the front of the contestants name seporated by an underscore so both formats are similar
+data_contestants$Name <- paste(data_contestants$Season, "_", data_contestants$Name)
+
+#Getting rid of the extra spaces in the name.
+data_contestants$Name <- gsub(" ", "", data_contestants$Name)
+```
+
+#Final fix to match the formats
+```{r}
+#If the season number in front of the name is one digit like "8" it is has a 0 in front of it like "08". This following line eliminates that.
+data_show$CONTESTANT <- sub("^0+", "", data_show$CONTESTANT)
+
+#Changing the column name in data_show to match data_contestant
+data_show$Name<-data_show$CONTESTANT
+```
+
+At this point, the formats should match, the only problem that could happen is inconsistency in the data where the contestants have different names in the different sources. Because of this concern we will do a test merge to search for this problem
+
+```{r}
+#Test merge by the contestants name
+Test_merge <- merge(data_contestants,data_show,by="Name")
+
+#How many unique names and if the unique names matches how many rows. True means we are good
+length(unique(Test_merge$Name))
+length(unique(Test_merge$Name)) == nrow(Test_merge)
+
+#calculating the frequencies of the names and where they are located. Hopefully there are none.
+n_occur <- data.frame(table(Test_merge$Name))
+n_occur[n_occur$Freq > 1,]
+Test_merge[Test_merge$Name %in% n_occur$Var1[n_occur$Freq > 1],]
+```
+
+There were a lot of inconsistencies in the data where when we joined multiple names were being overrided plus some names did not have the right names as in they were spelt different in each source.
+
+#Fixing the issue with merge by fixing inconsistencys in the data.
+```{r}
+#Checked wikipedia for the actual names of the contestant.
+data_contestants$Name<-replace(data_contestants$Name, 105,'8_RANDY_W')
+data_contestants$Name<-replace(data_contestants$Name, 112,'9_JUAN_G')
+data_contestants$Name<-replace(data_contestants$Name, 22,'5_BRIAN_V')
+data_contestants$Name<-replace(data_contestants$Name, 31,'6_ROBERT_M')
+data_contestants$Name<-replace(data_contestants$Name, 63,'7_RYAN_X')
+data_contestants$Name<-replace(data_contestants$Name, 127,'9_MICHAEL_X')
+data_show$Name<-replace(data_show$Name, 135,'07_RYAN_X')
+
+
+
+```
+
+I had to replace the names manually because they were spelt wrong so there was an error on the other end for data entry. 
+
+Now that I think it is fixed will do the real merge and call it "Completed_Data"
+
+#Merging for real this time and testing for inconsistencies
+```{r}
+#Real merging by the contestant names
+Completed_Data <- merge(data_contestants,data_show,by="Name")
+
+#How many unique names and if the unique names matches how many rows. True means we are good
+length(unique(Completed_Data$Name))
+length(unique(Completed_Data$Name)) == nrow(Completed_Data)
+
+#calculating the frequencies of the names and where they are located. Hopefully there are none.
+n_occur <- data.frame(table(Completed_Data$Name))
+n_occur[n_occur$Freq > 1,]
+Completed_Data[Completed_Data$Name %in% n_occur$Var1[n_occur$Freq > 1],]
+```
+
+The merge was successful, we have no duplicates or inconsistencies. Just to make sure we did not lose any of the winners in the merge were going to check
+
+#Checking to make sure we have all the contestant winners
+```{r}
+#eight seasons so should equal 8
+sum(Completed_Data$WINNER)
+
+```
+
+Now that we finished the merge, before we go to the next step where we calculate variable for our models, we are going to add the names of each seasons bachelorette and their age just for future references. Got this information from wikipedia.
+
+#Adding the bachelorettes and their age for convenience.
+```{r}
+#adding underscores so when we put the names of the bachelorette in we have something to replace
+Completed_Data$Bachelorette <- "_" 
+
+#adding the bachelorette
+Completed_Data$Bachelorette<-replace(Completed_Data$Bachelorette, 1,'5_Jillian_Harris')
+Completed_Data$Bachelorette<-replace(Completed_Data$Bachelorette, 2,'6_Ali_Fedotowsky')
+Completed_Data$Bachelorette<-replace(Completed_Data$Bachelorette, 3,'7_Ashley_Hebert')
+Completed_Data$Bachelorette<-replace(Completed_Data$Bachelorette, 4,'8_Emily_Maynard')
+Completed_Data$Bachelorette<-replace(Completed_Data$Bachelorette, 5,'9_Desiree_Hartsock')
+Completed_Data$Bachelorette<-replace(Completed_Data$Bachelorette, 6,'10_Andi_Dorfman')
+Completed_Data$Bachelorette<-replace(Completed_Data$Bachelorette, 7,'11_Kaitlyn_Bristowe')
+Completed_Data$Bachelorette<-replace(Completed_Data$Bachelorette, 8,'12_JoJo_Fletcher')
+
+#adding 0's so when we put the ages of the bachelorette in we have something to replace
+Completed_Data$B_Age <- 0 
+
+Completed_Data$B_Age<-replace(Completed_Data$B_Age, 1,29)
+Completed_Data$B_Age<-replace(Completed_Data$B_Age, 2,25)
+Completed_Data$B_Age<-replace(Completed_Data$B_Age, 3,26)
+Completed_Data$B_Age<-replace(Completed_Data$B_Age, 4,26)
+Completed_Data$B_Age<-replace(Completed_Data$B_Age, 5,27)
+Completed_Data$B_Age<-replace(Completed_Data$B_Age, 6,27)
+Completed_Data$B_Age<-replace(Completed_Data$B_Age, 7,29)
+Completed_Data$B_Age<-replace(Completed_Data$B_Age, 8,25)
+```
+
+----------------------------------------------------------------------
+# Creating Variables For Modeling #
+----------------------------------------------------------------------
+
+The first variable I am going to create to test as a predictor will be the age difference between the contestants and their seasons bachelorette. We will do this by using a bunch of nested ifelse() statements to get every scenario. For example, if the contestants season is x we subtract it by age x1. If the contestants season is y we subtract it by age y1. 
+
+#Calculating the age difference between contestants and their season's bachelorette
+```{r}
+#The ifelse statements are subtracting a contestants age by their seasons bachelorette.
+Completed_Data$Age_Dif <- ifelse(Completed_Data$Season==12,Completed_Data$Age-Completed_Data[8,16],ifelse(Completed_Data$Season==11,Completed_Data$Age-Completed_Data[7,16],ifelse(Completed_Data$Season==10,Completed_Data$Age-Completed_Data[6,16],ifelse(Completed_Data$Season==9,Completed_Data$Age-Completed_Data[5,16],ifelse(Completed_Data$Season==8,Completed_Data$Age-Completed_Data[4,16],ifelse(Completed_Data$Season==7,Completed_Data$Age-Completed_Data[3,16],ifelse(Completed_Data$Season==6,Completed_Data$Age-Completed_Data[2,16],ifelse(Completed_Data$Season==5,Completed_Data$Age-Completed_Data[1,16],100))))))))
+```
+
+The next variable I will use will be dates 7, 5, and 6. We will be making them categorical so we will be looking to see if they had one on one dates during these weeks or if they had a group date.
+
+#Creating three categorical variables, one for dates 7, 5, and 6
+```{r}
+#If contestant had a one on one date then 1 else 0
+Completed_Data$DATES.7<-ifelse(Completed_Data$DATES.7=="D1",1,0)
+Completed_Data$DATES.5<-ifelse(Completed_Data$DATES.5=="D1",1,0)
+Completed_Data$DATES.6<-ifelse(Completed_Data$DATES.6=="D1",1,0)
+
+#Converting to factor
+Completed_Data$DATES.7<-as.factor(Completed_Data$DATES.7)
+Completed_Data$DATES.5<-as.factor(Completed_Data$DATES.5)
+Completed_Data$DATES.6<-as.factor(Completed_Data$DATES.6)
+
+```
+
+The next variable we will use will be another categorical variable to see if they recieved the first impression rose or not.
+
+#Creating categorical variable to see if they recieved a first impression rose or not.
+```{r}
+#If contestant recieved first impression rose then 1 else 0
+Completed_Data$I_Rose<-ifelse(Completed_Data$ELIMINATION.1=="R1",1,0)
+#Converting to factor
+Completed_Data$I_Rose<-as.factor(Completed_Data$I_Rose)
+```
+
+The following variable will be a categorical variable deprived from the age difference we got earlier. We will be making a variable to see if the contestants age is within 2 years apart from the bachelorette.
+
+#Creating a categorical variable to see of the contestants are within 2 years of each other.
+```{r}
+#checking the age difference of the winners.
+ ifelse(Completed_Data$WINNER==1,Completed_Data$Age_Dif,0)
+
+#creating variable
+#If contestants age difference is 2,1,0,-1,-2 then 1 else 0
+Completed_Data$Sim_Age <- ifelse(Completed_Data$Age_Dif>-3 & Completed_Data$Age_Dif<3,1,0)
+#Converting to factor
+Completed_Data$Sim_Age<-as.factor(Completed_Data$Sim_Age)
+```
+
+
+The last variable I will be using is the distance between the contestants hometown and their bachelorettes hometown. To do this I will have to use geomapping to get the longitude and lattitude cordinates for their locations. SO first I will have to register with google maps and then create a column with their cords. (NOTE: there is a limit on how many times a day you can run this so please do not run this a ton of times.) 
+
+Note: You will have to use your own account and code which you can register for at:"https://console.cloud.google.com/project/_/apiui/credential?_ga=2.252565705.1118971226.1623094307-1221673132.1623094307"
+
+#Reigistering with google maps and then taking 
+```{r}
+# Put API code in quotation marks.
+register_google("")
+Completed_Data$Geo<-geocode(Completed_Data$Hometown)
+
+```
+
+Now that I got the cordinates of each contestants hometown, we need to get the cordinates of the bachelorettes hometown. The code is commented out because of the limit with geocode so I made columns with respect to the bachelorettes that have their lattitudes and longitudes just for the conviences so when the code is re ran this wont keep running.
+
+#Calculating the cordinates of the bachelorettes hometowns and storing them.
+```{r}
+#geocode("Vancouver, British Columbia, Canada")
+#geocode("Massachusetts")
+#geocode("Madawaska, Maine")
+#geocode("Charlotte, North Carolina")
+#geocode("Colorado")
+#geocode("Atlanta, Georgia")
+#geocode("Vancouver, British Columbia, Canada")
+#geocode("Dallas, Texas")
+
+
+Completed_Data$B_geo_lon<-replace(Completed_Data$B_geo_lon, 1,-123.1207)
+Completed_Data$B_geo_lon<-replace(Completed_Data$B_geo_lon, 2,-71.38244)
+Completed_Data$B_geo_lon<-replace(Completed_Data$B_geo_lon, 3,-68.3217)
+Completed_Data$B_geo_lon<-replace(Completed_Data$B_geo_lon, 4,-80.84313)
+Completed_Data$B_geo_lon<-replace(Completed_Data$B_geo_lon, 5,-105.7821)
+Completed_Data$B_geo_lon<-replace(Completed_Data$B_geo_lon, 6,-84.38798)
+Completed_Data$B_geo_lon<-replace(Completed_Data$B_geo_lon, 7,-123.1207)
+Completed_Data$B_geo_lon<-replace(Completed_Data$B_geo_lon, 8,-96.79699)
+
+Completed_Data$B_geo_lat<-replace(Completed_Data$B_geo_lat, 1,49.28273)
+Completed_Data$B_geo_lat<-replace(Completed_Data$B_geo_lat, 2,42.40721)
+Completed_Data$B_geo_lat<-replace(Completed_Data$B_geo_lat, 3,47.35532)
+Completed_Data$B_geo_lat<-replace(Completed_Data$B_geo_lat, 4,35.22709)
+Completed_Data$B_geo_lat<-replace(Completed_Data$B_geo_lat, 5,39.55005)
+Completed_Data$B_geo_lat<-replace(Completed_Data$B_geo_lat, 6,33.749)
+Completed_Data$B_geo_lat<-replace(Completed_Data$B_geo_lat, 7,49.28273)
+Completed_Data$B_geo_lat<-replace(Completed_Data$B_geo_lat, 8,32.77666)
+```
+
+The next step is to use a bunch of nested ifelse() statements to have the cordinates of the conestant's bachelorette's hometown assigned to each contestant so that we can calculate the distance. NOTE: I could have referenced the column instead of putting in the bachelorettes cords manually. I should have done that but now since its already in I do not have a reason to change it.
+
+#Assigning the cordinates of the contestant's bachelorette's hometown
+```{r}
+Completed_Data$B_geo_lon<-ifelse(Completed_Data$Season==5,-123.1207,ifelse(Completed_Data$Season==6,-71.38244,ifelse(Completed_Data$Season==7,-68.3217,ifelse(Completed_Data$Season==8,-80.84313,ifelse(Completed_Data$Season==9,-105.7821,ifelse(Completed_Data$Season==10,-84.38798,ifelse(Completed_Data$Season==11,-123.1207,ifelse(Completed_Data$Season==12,-96.79699,0))))))))
+
+Completed_Data$B_geo_lat<-ifelse(Completed_Data$Season==5,49.28273,ifelse(Completed_Data$Season==6,42.40721,ifelse(Completed_Data$Season==7,47.35532,ifelse(Completed_Data$Season==8,35.22709,ifelse(Completed_Data$Season==9,39.55005,ifelse(Completed_Data$Season==10,33.749,ifelse(Completed_Data$Season==11,49.28273,ifelse(Completed_Data$Season==12,32.77666,0))))))))
+
+
+```
+
+The previous step essentially created a column that had the longitude and lattitude of a contestant's bachelorette's hometown so I could compare the distance.
+
+The final step is taking the cordinates of the contestants and their bachelorette and finding the distance between them. I do this by first seporating the longitude and latitude for each contestant so its not in a matrix and then bring it back into the dataframe so I can mutate a new column with our calculated distance in kilometers.
+
+#Calculating the distance between hometowns.
+```{r}
+#Seporataing the matrix of cords and then bringing it back into the dataframe.
+Geo<-Completed_Data$Geo
+Geolon<-Geo$lon
+Geolat<-Geo$lat
+Completed_Data$Geo_lon<- Geolon
+Completed_Data$Geo_lat<- Geolat
+
+#Running the function to calculate distance and mutating a new column for it.
+Completed_Data<-Completed_Data%>%
+  mutate(Distance = distHaversine(cbind(B_geo_lon, B_geo_lat), cbind(Geo_lon,Geo_lat)))
+
+#Converting to kilometers.
+Completed_Data$Distance<-Completed_Data$Distance/1000
+```
+
+--------------------------------------
+# Creating our model #
+-------------------------------------
+
+I am now going to be experimenting with different models to try and find the best classification. I am going to start by making a model with all our predictors to see what we are working with
+
+#Model with all predictors
+```{r}
+glm<-glm(WINNER~Distance+I_Rose + Age_Dif+Sim_Age+DATES.7+DATES.5+DATES.6, data = Completed_Data, family = "binomial")
+summary(glm)
+#AIC:47.035
+#P values were not as bad as i thought they would be but distance is not good.
+```
+
+From this model we can tell distance and most likely age probally does not have enough statistical evidence in predicting the winner but I will look further into that later. The thing I want to take a closer look at now are the three different weeks for one on one dates and combination with the first impression rose since they had the best values.
+
+#Model with each combination of dates with first impression rose
+```{r}
+glm1<-glm(WINNER~I_Rose +DATES.7+DATES.5+DATES.6, data = Completed_Data, family = "binomial")
+glm2<-glm(WINNER~I_Rose + DATES.7+DATES.5, data = Completed_Data, family = "binomial")
+glm3<-glm(WINNER~I_Rose + DATES.7+DATES.6, data = Completed_Data, family = "binomial")
+glm4<-glm(WINNER~I_Rose +DATES.5+DATES.6, data = Completed_Data, family = "binomial")
+summary(glm1)
+summary(glm2)
+summary(glm3)
+summary(glm4)
+
+#glm1: P values were good except for dates.6 but still not bad with an aic score of 45.578
+#glm2: P values were good AIC score of 45.199
+#glm3: P values were again not good for dates.6 but AIC score of 52.919
+#glm4: P values were again not good for dates.6 but AIC score of 49.645
+```
+
+The main take away from this is that the first impression rose is very important. In all the models I have run the p value was always under .05. dates.6 had a history of continuously being not so good so I will not use that as a predictor for our final model.
+
+The next thing we will check is looking more into distance and age in combination with glm2 to see if I can use those predictors.
+
+#models with different combinations with glm2
+```{r}
+
+glm2_1<-glm(WINNER~I_Rose +DATES.5+DATES.7+Distance+Sim_Age, data = Completed_Data, family = "binomial")
+glm2_2<-glm(WINNER~I_Rose +DATES.5+DATES.7+Distance, data = Completed_Data, family = "binomial")
+glm2_3<-glm(WINNER~I_Rose +DATES.5+DATES.7+Sim_Age, data = Completed_Data, family = "binomial")
+
+summary(glm2_1)
+summary(glm2_2)
+summary(glm2_3)
+
+#glm2_1: P values were not good for distance, a little better for and similar age but still above .05. AIC score 46.639.
+#glm2_2: P values were similar to original model but distance is not a good predictor, AIC score 46.999
+#glm2_3 P values were a little better since I did not use distance but those other factors are not good predictors, but the best AIC score of 44.784 which is the best score.
+```
+
+I will be usinig the model (glm2_3) as the final because of the better scores. The last step will be doing some testing and experimenting with the chosen model.
+
+-----------------------------------------------
+# Final Model prep #
+-----------------------------------------------
+
+To accurately see how good our model is I am going to create predictions and test for accuracy.
+
+#Making predictions and testing accuracy
+```{r}
+
+#Making prediction
+Completed_Data$pred_glm <- predict(glm2_3, type = "response")
+
+#setting criteria for confusion matrix
+Completed_Data$pred.outcome.logo <- as.numeric(Completed_Data$pred_glm > 0.5)
+
+# Confusion matrix
+xtabs(~ WINNER + pred.outcome.logo, data=Completed_Data)
+
+cmlogo <- xtabs(~ WINNER + pred.outcome.logo, data=Completed_Data)
+
+# Overall % accuracy
+prop.table(cmlogo)
+
+accuracy_logo <- sum(diag(prop.table(cmlogo)))
+accuracy_logo
+
+# % accuracy by outcome
+prop.table(cmlogo, margin=1)
+
+```
+
+The results of the accuracy test for our predictions shows that the model accurately records if the contestant won or not with an accuracy of  98.46% but only chose the winner right 75percent of the time. This is expected because I am only using the best variables which happen to only be categorical.
+
+I am going to take a further look and see the confidence intervals for each contestant that won to see how it predicted them winning.
+
+#Confidence intervals for winners
+```{r}
+
+#Selecting the rows of the contestants that won
+Bach_Winners <- Completed_Data[c(15,48,68,85,128,145,168,188),]
+
+#using them to create a confidence interval
+hypo_glm_pred_link_example <- predict(glm2_3, newdata = Bach_Winners, type = "link", se.fit = TRUE, level = 0.95)
+hypo_glm_pred_example <- data.frame(fit = plogis(hypo_glm_pred_link_example$fit),
+                            lwr = plogis(hypo_glm_pred_link_example$fit - 2*hypo_glm_pred_link_example$se.fit),
+                            upr = plogis(hypo_glm_pred_link_example$fit + 2*hypo_glm_pred_link_example$se.fit))
+
+#The predictions with a 95 percent condience interval
+hypo_glm_pred_example
+
+```
+
+What I learn from this is this model leans on the side of not classifying a contestant as not winning. The contestants that won were all around the 50% mark for the most part which means they barely got labeled as winner so if the season does not follow the trends of our categorical variables it will not predict it a win. This model does not take into account curveballs only historic data. Another side note is the confidence interval is so large which means our model is not that confident.
+
+I am not going to test the model for season 13 which I did not include in the model so I could test it out.
+
+------------------------------------
+# Testing the model #
+------------------------------------
+
+I do not have the age of the contestants in season 13 so I will look them up online. This is important because our predictor Sim_Age was the reason why it classified 75 % right rather than 25%
+
+#Getting the data ready
+```{r}
+Test_Show <-read.csv("https://raw.githubusercontent.com/fivethirtyeight/data/master/bachelorette/bachelorette.csv")
+#Header row appeared multiple times throughout the data so this eliminates the extra rows.
+Test_Show<-Test_Show[Test_Show$SEASON != "SEASON", ] 
+
+#Creating a column to tell if a contestant won or not. Columns Eliminated.9 and Elimination .10 are where it tells the user if a contestant won. We want the results in one column rather than two so we can use it as our response variable. Then we convert that row to numeric (Season being numeric rather than factor will be more convienent later)
+Test_Show$WINNER<-ifelse(Test_Show$ELIMINATION.10=="W",1,ifelse(Test_Show$ELIMINATION.9=="W",1,0))
+Test_Show$SEASON<-as.numeric(Test_Show$SEASON)
+
+#Only selecting season 13
+Test_Show<- Test_Show %>%
+  select(SHOW,SEASON,CONTESTANT,WINNER,ELIMINATION.1,DATES.5,DATES.7,DATES.6)%>%
+  filter(SHOW=="Bachelorette") %>%
+  filter(SEASON==13)
+```
+
+Now we need to add a column for all of the contestants age
+
+#Contestant's Age and bachelorettes age
+```{r}
+
+#Data from wikipedia because original data source did not have the age of contestants in season 13
+Test_Show$Age<-replace(Test_Show$Age, 1,37)
+Test_Show$Age<-replace(Test_Show$Age, 2,31)
+Test_Show$Age<-replace(Test_Show$Age, 3,29)
+Test_Show$Age<-replace(Test_Show$Age, 4,26)
+Test_Show$Age<-replace(Test_Show$Age, 5,27)
+Test_Show$Age<-replace(Test_Show$Age, 6,32)
+Test_Show$Age<-replace(Test_Show$Age, 7,28)
+Test_Show$Age<-replace(Test_Show$Age, 8,28)
+Test_Show$Age<-replace(Test_Show$Age, 9,35)
+Test_Show$Age<-replace(Test_Show$Age, 10,26)
+Test_Show$Age<-replace(Test_Show$Age, 11,28)
+Test_Show$Age<-replace(Test_Show$Age, 12,30)
+Test_Show$Age<-replace(Test_Show$Age, 13,30)
+Test_Show$Age<-replace(Test_Show$Age, 14,31)
+Test_Show$Age<-replace(Test_Show$Age, 15,32)
+Test_Show$Age<-replace(Test_Show$Age, 16,29)
+Test_Show$Age<-replace(Test_Show$Age, 17,30)
+Test_Show$Age<-replace(Test_Show$Age, 18,31)
+Test_Show$Age<-replace(Test_Show$Age, 19,27)
+Test_Show$Age<-replace(Test_Show$Age, 20,31)
+Test_Show$Age<-replace(Test_Show$Age, 21,32)
+Test_Show$Age<-replace(Test_Show$Age, 22,30)
+Test_Show$Age<-replace(Test_Show$Age, 23,30)
+Test_Show$Age<-replace(Test_Show$Age, 24,29)
+Test_Show$Age<-replace(Test_Show$Age, 25,29)
+Test_Show$Age<-replace(Test_Show$Age, 26,35)
+Test_Show$Age<-replace(Test_Show$Age, 27,26)
+Test_Show$Age<-replace(Test_Show$Age, 28,26)
+Test_Show$Age<-replace(Test_Show$Age, 29,31)
+Test_Show$Age<-replace(Test_Show$Age, 30,26)
+Test_Show$Age<-replace(Test_Show$Age, 31,30)
+
+#Bachelorettes age
+Test_Show$B_Age <- replace(Test_Show$B_Age, 1,32 )
+```
+
+
+Now I need to get the variables in categorical formats again for the 1 on 1 dates as well as the first impression rose and age
+
+#redoing the predictor variables
+```{r}
+#THis is all recylced code from above so no comments.
+Test_Show$DATES.7<-ifelse(Test_Show$DATES.7=="D1",1,0)
+Test_Show$DATES.5<-ifelse(Test_Show$DATES.5=="D1",1,0)
+Test_Show$DATES.6<-ifelse(Test_Show$DATES.6=="D1",1,0)
+
+Test_Show$DATES.7<-as.factor(Test_Show$DATES.7)
+Test_Show$DATES.5<-as.factor(Test_Show$DATES.5)
+Test_Show$DATES.6<-as.factor(Test_Show$DATES.6)
+
+Test_Show$I_Rose<-ifelse(Test_Show$ELIMINATION.1=="R1",1,0)
+
+Test_Show$I_Rose<-as.factor(Test_Show$I_Rose)
+
+Test_Show$Age_Dif <- ifelse(Test_Show$SEASON==13,Test_Show$Age-Test_Show$B_Age,0)
+
+Test_Show$Sim_Age <- ifelse(Test_Show$Age_Dif>-3 & Test_Show$Age_Dif<3,1,0)  
+Test_Show$Sim_Age<-as.factor(Test_Show$Sim_Age)
+
+```
+
+Now that I have all the predictor variables set up the same were going to test the accuracy of this data with the last model.
+
+#Testing season 13
+```{r}
+#Using the previous model to predict season 13
+Test_Show$pred_glm <- predict(glm2_3, newdata=Test_Show, type='response')
+
+Test_Show$pred.outcome.logo <- as.numeric(Test_Show$pred_glm > 0.5)
+
+# Confusion matrix
+xtabs(~ WINNER + pred.outcome.logo, data=Test_Show)
+
+cmlogo <- xtabs(~ WINNER + pred.outcome.logo, data=Test_Show)
+
+# Overall % accuracy
+prop.table(cmlogo)
+
+accuracy_logo <- sum(diag(prop.table(cmlogo)))
+accuracy_logo
+
+# % accuracy by outcome
+prop.table(cmlogo, margin=1)
+```
+
+
+The model was 100 percent accurate for season 13 which is a good sign.
+
+-------------------------------------
+# Takeaways #
+-------------------------------------
+
+The model is pretty accurate but I do have to wait til after week 6 to get an accurate prediction. This model will be used for checking the likelyhood of certain conestants winning when it gets down to the last couple weeks. I was also hoping to use more variables that were not categorical but it just did not make much sense for this project because they were not significant enough. For example with how many contestants we have, we can not expect the distance between hometowns to be a good predictor. The distance between each winners hometown and bachelorettes hometown are so different the model could not use this as a statistical significant predictor.
+
+Age difference was another variable that was not categorical but I sadly could not use because there was not enough consistency with the winners. The producers tend to put people on the show who are similar in age which is why that it is not a good predictor.
+
+Overeall I am happy with the outcome of this model and feel confident I chose one of the best choices. The model is not perfect and the confidence interval is too large but other than that it is a decent model that can be used when the season has a three or four weeks left to see who is most likely going to win which you will be able to utilize by using the tool below.
+
+---------------------------------------
+# Tool #
+---------------------------------------
+
+By utilizing the rbind function, add in the contestant of whatever season you want to test the model on as well as if they had a one on one date on week 5 and 7, their age, the bachelorettes age, and if they recieved a first impression rose. after you put them all in you can run the code.
+
+The default code that is in there right now is for season 13
+
+```{r}
+#DONT CHANGE
+tool <- data.frame("Contestant","I_Rose","DATES.5","DATES.7","Contestant_Age","Bachelorette_Age")
+
+
+#This is an example of what format to insert into the rbind function. 
+
+# EXAMPLE #
+#-------------#
+#tool<-rbind(tool, c("Contestant_Name", I_Rose,DATES.5,DATES.7,"Contestant_Age","Bachelorette_Age"))
+
+#tool<-rbind(tool, c("John",1,1,1,"37","32"))
+
+#For Dates.5 and Dates.7, a 1 represents that they had a one on one date, a 0 represents they did not
+#For I_Rose, a  1 represents they recieved the first impression rose, a 0 represents they did not.
+#-------------#
+
+#If you have to add more conestants or delete some you may do that.
+
+tool<-rbind(tool, c("1", 1,1,1,"37","32"))
+tool<-rbind(tool, c("2", 0,0,1,"31","32"))
+tool<-rbind(tool, c("3", 0,0,0,"29","32"))
+tool<-rbind(tool, c("4", 0,0,1,"26","32"))
+tool<-rbind(tool, c("5", 0,0,0,"27","32"))
+tool<-rbind(tool, c("6", 0,0,0,"32","32"))
+tool<-rbind(tool, c("7", 0,0,0,"28","32"))
+tool<-rbind(tool, c("8", 0,0,0,"28","32"))
+tool<-rbind(tool, c("9", 0,0,0,"35","32"))
+tool<-rbind(tool, c("10", 0,0,0,"26","32"))
+tool<-rbind(tool, c("11", 0,0,0,"28","32"))
+tool<-rbind(tool, c("12", 0,0,0,"30","32"))
+tool<-rbind(tool, c("13", 0,0,0,"30","32"))
+tool<-rbind(tool, c("14", 0,0,0,"31","32"))
+tool<-rbind(tool, c("15", 0,0,0,"32","32"))
+tool<-rbind(tool, c("16", 0,0,0,"29","32"))
+tool<-rbind(tool, c("17", 0,0,0,"30","32"))
+tool<-rbind(tool, c("18", 0,0,0,"31","32"))
+tool<-rbind(tool, c("19", 0,0,0,"27","32"))
+tool<-rbind(tool, c("20", 0,0,0,"31","32"))
+tool<-rbind(tool, c("21", 0,0,0,"32","32"))
+tool<-rbind(tool, c("22", 0,0,0,"30","32"))
+tool<-rbind(tool, c("23", 0,0,0,"30","32"))
+tool<-rbind(tool, c("24", 0,0,0,"29","32"))
+tool<-rbind(tool, c("25", 0,0,0,"29","32"))
+tool<-rbind(tool, c("26", 0,0,0,"35","32"))
+tool<-rbind(tool, c("27", 0,0,0,"26","32"))
+tool<-rbind(tool, c("28", 0,0,0,"26","32"))
+tool<-rbind(tool, c("29", 0,0,0,"31","32"))
+tool<-rbind(tool, c("30", 0,0,0,"26","32"))
+tool<-rbind(tool, c("31", 0,0,0,"30","32"))
+
+# Do not change anything below this comment #
+tool<-tool[-1,]
+
+tool$I_Rose<-as.factor(tool$X.I_Rose.) #Changing to factor
+tool$DATES.5<-as.factor(tool$X.DATES.5.) #Changing to factor
+tool$DATES.7<-as.factor(tool$X.DATES.7.) #Changing to factor
+tool$Contestant_Age<-as.numeric(tool$X.Contestant_Age.) #Changing to numeric
+tool$Bachelorette_Age<-as.numeric(tool$X.Bachelorette_Age.) #Changing to numeric
+tool$Contestant<-tool$X.Contestant. #Changing the name of the column
+tool$Sim_Age<- ifelse(tool$Contestant_Age-tool$Bachelorette_Age >-3 & tool$Contestant_Age-tool$Bachelorette_Age<3,1,0) #creating similar age variable
+tool$Sim_Age<-as.factor(tool$Sim_Age) #Changing to factor
+tool <- subset(tool,select = -c(X.I_Rose.,X.DATES.5.,X.DATES.7.,X.Contestant_Age.,X.Bachelorette_Age.)) #GEtting rid of columns we do not need
+
+#Making the prediction
+tool$pred_glm <- predict(glm2_3, newdata=tool, type='response')
+
+#seeting the winner to whoever has the highest prediction.
+tool$pred.outcome.logo <- as.numeric(tool$pred_glm == max(tool$pred_glm))
+
+#Confidence interval
+hypo_glm_pred_link_example1 <- predict(glm2_3, newdata = tool, type = "link", se.fit = TRUE, level = 0.95)
+hypo_glm_pred_example1 <- data.frame(fit = plogis(hypo_glm_pred_link_example1$fit),
+                            lwr = plogis(hypo_glm_pred_link_example1$fit - 2*hypo_glm_pred_link_example1$se.fit),
+                            upr = plogis(hypo_glm_pred_link_example1$fit + 2*hypo_glm_pred_link_example1$se.fit))
+#assigning confidence intervals
+tool$fit<-hypo_glm_pred_example1$fit
+  tool$lwr<-hypo_glm_pred_example1$lwr
+  tool$upr<-hypo_glm_pred_example1$upr
+
+  #plotting results
+ggplot() + 
+geom_pointrange(data=tool, mapping=aes(x=Contestant, y=fit, ymin=lwr, ymax=upr), width=0.2, size=1, color="blue", fill="white", shape=22)  
+
+
+
+```
+
+#Season 14
+
+I added this just for fun to see.
+No comments because same as before
+
+```{r}
+tool_S14 <- data.frame("Contestant","I_Rose","DATES.5","DATES.7","Contestant_Age","Bachelorette_Age")
+
+tool_S14<-rbind(tool_S14, c("1", 1,0,1,"29","28"))
+tool_S14<-rbind(tool_S14, c("2", 0,0,1,"28","28"))
+tool_S14<-rbind(tool_S14, c("3", 0,0,0,"29","28"))
+tool_S14<-rbind(tool_S14, c("4", 0,1,1,"26","28"))
+tool_S14<-rbind(tool_S14, c("5", 0,0,0,"29","28"))
+tool_S14<-rbind(tool_S14, c("6", 0,0,0,"31","28"))
+tool_S14<-rbind(tool_S14, c("7", 0,0,0,"25","28"))
+tool_S14<-rbind(tool_S14, c("8", 0,0,0,"26","28"))
+tool_S14<-rbind(tool_S14, c("9", 0,0,0,"30","28"))
+tool_S14<-rbind(tool_S14, c("10", 0,0,0,"28","28"))
+tool_S14<-rbind(tool_S14, c("11", 0,0,0,"26","28"))
+tool_S14<-rbind(tool_S14, c("12", 0,0,0,"25","28"))
+tool_S14<-rbind(tool_S14, c("13", 0,0,0,"31","28"))
+tool_S14<-rbind(tool_S14, c("14", 0,0,0,"27","28"))
+tool_S14<-rbind(tool_S14, c("15", 0,0,0,"31","28"))
+tool_S14<-rbind(tool_S14, c("16", 0,0,0,"27","28"))
+tool_S14<-rbind(tool_S14, c("17", 0,0,0,"26","28"))
+tool_S14<-rbind(tool_S14, c("18", 0,0,0,"30","28"))
+tool_S14<-rbind(tool_S14, c("19", 0,0,0,"31","28"))
+tool_S14<-rbind(tool_S14, c("20", 0,0,0,"27","28"))
+tool_S14<-rbind(tool_S14, c("21", 0,0,0,"28","28"))
+tool_S14<-rbind(tool_S14, c("22", 0,0,0,"27","28"))
+tool_S14<-rbind(tool_S14, c("23", 0,0,0,"28","28"))
+tool_S14<-rbind(tool_S14, c("24", 0,0,0,"26","28"))
+tool_S14<-rbind(tool_S14, c("25", 0,0,0,"27","28"))
+tool_S14<-rbind(tool_S14, c("26", 0,0,0,"31","28"))
+tool_S14<-rbind(tool_S14, c("27", 0,0,0,"30","28"))
+tool_S14<-rbind(tool_S14, c("28", 0,0,0,"29","28"))
+
+tool_S14<-tool_S14[-1,]
+
+tool_S14$I_Rose<-as.factor(tool_S14$X.I_Rose.)
+tool_S14$DATES.5<-as.factor(tool_S14$X.DATES.5.)
+tool_S14$DATES.7<-as.factor(tool_S14$X.DATES.7.)
+tool_S14$Contestant_Age<-as.numeric(tool_S14$X.Contestant_Age.)
+tool_S14$Bachelorette_Age<-as.numeric(tool_S14$X.Bachelorette_Age.)
+tool_S14$Contestant<-tool_S14$X.Contestant.
+tool_S14$Sim_Age<- ifelse(tool_S14$Contestant_Age-tool_S14$Bachelorette_Age >-3 & tool_S14$Contestant_Age-tool_S14$Bachelorette_Age<3,1,0)
+tool_S14$Sim_Age<-as.factor(tool_S14$Sim_Age)
+tool_S14 <- subset(tool_S14,select = -c(X.I_Rose.,X.DATES.5.,X.DATES.7.,X.Contestant_Age.,X.Bachelorette_Age.))
+
+tool_S14$pred_glm <- predict(glm2_3, newdata=tool_S14, type='response')
+
+tool_S14$pred.outcome.logo <- as.numeric(tool_S14$pred_glm == max(tool_S14$pred_glm))
+
+hypo_glm_pred_link_example11 <- predict(glm2_3, newdata = tool_S14, type = "link", se.fit = TRUE, level = 0.95)
+hypo_glm_pred_example11 <- data.frame(fit = plogis(hypo_glm_pred_link_example11$fit),
+                            lwr = plogis(hypo_glm_pred_link_example11$fit - 2*hypo_glm_pred_link_example11$se.fit),
+                            upr = plogis(hypo_glm_pred_link_example11$fit + 2*hypo_glm_pred_link_example11$se.fit))
+
+tool_S14$fit<-hypo_glm_pred_example11$fit
+  tool_S14$lwr<-hypo_glm_pred_example11$lwr
+  tool_S14$upr<-hypo_glm_pred_example11$upr
+
+ggplot() + 
+geom_pointrange(data=tool_S14, mapping=aes(x=Contestant, y=fit, ymin=lwr, ymax=upr), width=0.2, size=1, color="blue", fill=ifelse(tool_S14$fit==max(tool_S14$fit),"green",ifelse(tool_S14$upr > max(tool_S14$lwr),"yellow","red")), shape=22) +
+  labs(x="Contestant Number", y="Chance of winning", title="Bachelorette: Season 14",caption = "Blue line indicates the 95% confidence interval.")
+
+```
+
+
+
